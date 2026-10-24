@@ -18,6 +18,7 @@ leads_*.xlsx
 leads_*.json
 *.csv
 !templates/*.csv
+*.db
 
 # Operating System files
 .DS_Store
