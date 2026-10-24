@@ -208,95 +208,115 @@ class CompanyEnrichmentBot:
                 "places.editorialSummary,nextPageToken"
             )
         }
-        
-        all_places = []
-        next_page_token = None
-        max_pages = 6  # Look up to 120 total candidates to satisfy newly listed / deduplication requirements
 
-        page_count = 0
-        while len(all_places) < limit and page_count < max_pages:
-            page_count += 1
-            data = {
-                "textQuery": query,
-                "pageSize": 20
-            }
-            if next_page_token:
-                data["pageToken"] = next_page_token
+        # If user wants newly listed, query variations with "new" / "newly opened" to prompt Google Maps
+        # to surface recent listings rather than just veteran establishments with 1000+ reviews
+        search_queries = [query]
+        if only_new_listed:
+            search_queries = [
+                f"newly opened {query}",
+                f"new {query}",
+                query
+            ]
 
-            try:
-                resp = self.session.post(url, headers=headers, json=data, timeout=8)
-                if resp.status_code == 200:
-                    resp_json = resp.json()
-                    raw_places = resp_json.get("places", [])
-                    if not raw_places:
-                        break
+        candidate_places = []
+        seen_place_ids = set()
 
-                    for p in raw_places:
-                        # 1. Skip permanently or temporarily closed businesses (real active businesses only)
-                        status = p.get("businessStatus", "OPERATIONAL")
-                        if status in ["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]:
-                            continue
+        for q in search_queries:
+            next_page_token = None
+            max_pages_per_query = 3 if only_new_listed else 5
+            page_count = 0
 
-                        place_id = p.get("id", "")
-                        name_obj = p.get("displayName", {})
-                        name = name_obj.get("text", "") if isinstance(name_obj, dict) else str(name_obj)
-                        website = p.get("websiteUri", "")
+            while page_count < max_pages_per_query:
+                page_count += 1
+                data = {
+                    "textQuery": q,
+                    "pageSize": 20
+                }
+                if next_page_token:
+                    data["pageToken"] = next_page_token
 
-                        # 2. Skip if already enriched in previous searches
-                        if db.is_lead_duplicate(place_id, website, name, existing_ids, existing_domains, existing_names):
-                            continue
-
-                        user_ratings = p.get("userRatingCount")
-                        user_ratings_count = int(user_ratings) if user_ratings is not None else 0
-                        is_new = (user_ratings_count <= 10)
-
-                        # 3. If user requested ONLY newly listed, enforce <= 10 reviews
-                        if only_new_listed and not is_new:
-                            continue
-
-                        phone = p.get("nationalPhoneNumber") or p.get("internationalPhoneNumber", "")
-                        type_obj = p.get("primaryTypeDisplayName", {})
-                        category = type_obj.get("text", "") if isinstance(type_obj, dict) else ""
-                        summary_obj = p.get("editorialSummary", {})
-                        summary = summary_obj.get("text", "") if isinstance(summary_obj, dict) else ""
-
-                        all_places.append({
-                            "place_id": place_id,
-                            "name": name,
-                            "address": p.get("formattedAddress", ""),
-                            "phone": phone,
-                            "website": website,
-                            "rating": str(p.get("rating", "")),
-                            "user_rating_count": user_ratings_count,
-                            "is_new_listing": is_new,
-                            "category": category,
-                            "summary": summary,
-                            "google_maps_uri": p.get("googleMapsUri", ""),
-                            "is_google_verified": True
-                        })
-
-                        # Track seen in current run as well to avoid in-run duplicates
-                        if place_id:
-                            existing_ids.add(place_id)
-                        if website:
-                            existing_domains.add(db.clean_domain_name(website))
-
-                        if len(all_places) >= limit:
+                try:
+                    resp = self.session.post(url, headers=headers, json=data, timeout=8)
+                    if resp.status_code == 200:
+                        resp_json = resp.json()
+                        raw_places = resp_json.get("places", [])
+                        if not raw_places:
                             break
 
-                    next_page_token = resp_json.get("nextPageToken")
-                    if not next_page_token or len(all_places) >= limit:
+                        for p in raw_places:
+                            status = p.get("businessStatus", "OPERATIONAL")
+                            if status in ["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]:
+                                continue
+
+                            place_id = p.get("id", "")
+                            if not place_id or place_id in seen_place_ids:
+                                continue
+
+                            name_obj = p.get("displayName", {})
+                            name = name_obj.get("text", "") if isinstance(name_obj, dict) else str(name_obj)
+                            website = p.get("websiteUri", "")
+
+                            # Check lead memory database
+                            if db.is_lead_duplicate(place_id, website, name, existing_ids, existing_domains, existing_names):
+                                continue
+
+                            seen_place_ids.add(place_id)
+
+                            user_ratings = p.get("userRatingCount")
+                            user_ratings_count = int(user_ratings) if user_ratings is not None else 0
+
+                            phone = p.get("nationalPhoneNumber") or p.get("internationalPhoneNumber", "")
+                            type_obj = p.get("primaryTypeDisplayName", {})
+                            category = type_obj.get("text", "") if isinstance(type_obj, dict) else ""
+                            summary_obj = p.get("editorialSummary", {})
+                            summary = summary_obj.get("text", "") if isinstance(summary_obj, dict) else ""
+
+                            candidate_places.append({
+                                "place_id": place_id,
+                                "name": name,
+                                "address": p.get("formattedAddress", ""),
+                                "phone": phone,
+                                "website": website,
+                                "rating": str(p.get("rating", "")),
+                                "user_rating_count": user_ratings_count,
+                                "category": category,
+                                "summary": summary,
+                                "google_maps_uri": p.get("googleMapsUri", ""),
+                                "is_google_verified": True
+                            })
+
+                        next_page_token = resp_json.get("nextPageToken")
+                        if not next_page_token:
+                            break
+                        time.sleep(0.3)
+                    else:
                         break
-                    
-                    time.sleep(0.3)
-                else:
-                    console.print(f"[red]Google Places API Error ({resp.status_code}):[/red] {resp.text}")
+                except Exception:
                     break
-            except Exception as e:
-                console.print(f"[red]Google Places API request failed:[/red] {e}")
+
+            if only_new_listed and len(candidate_places) >= limit * 2:
                 break
 
-        return all_places
+        if not candidate_places:
+            return []
+
+        # If "Only Newly Listed" is requested, sort candidates by lowest review count (ascending)
+        if only_new_listed:
+            candidate_places.sort(key=lambda x: x.get("user_rating_count", 0))
+
+        # Mark "is_new_listing" appropriately
+        final_places = candidate_places[:limit]
+        for p in final_places:
+            rev_cnt = p.get("user_rating_count", 0)
+            p["is_new_listing"] = (rev_cnt <= 25) or only_new_listed
+            # Add to deduplication tracking
+            if p.get("place_id"):
+                existing_ids.add(p["place_id"])
+            if p.get("website"):
+                existing_domains.add(db.clean_domain_name(p["website"]))
+
+        return final_places
 
     def _search_free_web(
         self,
