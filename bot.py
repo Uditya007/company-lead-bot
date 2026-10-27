@@ -28,7 +28,14 @@ try:
 except ImportError:
     GENAI_AVAILABLE = False
 
-console = Console()
+class SafeConsole(Console):
+    def print(self, *args, **kwargs):
+        try:
+            super().print(*args, **kwargs)
+        except (OSError, IOError):
+            pass
+
+console = SafeConsole()
 
 # Load environment variables
 load_dotenv(override=True)
