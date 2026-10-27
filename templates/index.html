@@ -167,6 +167,19 @@
                 </span>
               </label>
 
+              <!-- Toggle 3: Only No Website -->
+              <label class="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-slate-700 cursor-pointer transition select-none">
+                <input 
+                  type="checkbox" 
+                  id="onlyNoWebsiteCheck" 
+                  class="w-4 h-4 rounded text-amber-500 bg-slate-900 border-slate-700 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer"
+                />
+                <span class="flex items-center gap-1.5 font-medium text-slate-200">
+                  <span class="text-amber-400 font-bold">🚫 No Website Only</span>
+                  <span class="text-slate-400 text-[11px]">(Web Design & Pitch Leads)</span>
+                </span>
+              </label>
+
             </div>
 
             <!-- Quick Suggestions -->
@@ -262,6 +275,7 @@
       const query = document.getElementById('queryInput').value.trim();
       const limit = document.getElementById('limitSelect').value;
       const onlyNewListed = document.getElementById('onlyNewListedCheck').checked;
+      const onlyNoWebsite = document.getElementById('onlyNoWebsiteCheck').checked;
       const excludeAlreadyEnriched = document.getElementById('excludeEnrichedCheck').checked;
 
       if (!query) return;
@@ -272,7 +286,7 @@
       const searchBtn = document.getElementById('searchBtn');
       const loadingDescription = document.getElementById('loadingDescription');
 
-      loadingDescription.textContent = `Scanning Google Maps for up to ${limit} companies${onlyNewListed ? ' (Newly Listed Only)' : ''}${excludeAlreadyEnriched ? ' (Excluding previously seen)' : ''}...`;
+      loadingDescription.textContent = `Scanning Google Maps for up to ${limit} companies${onlyNewListed ? ' (Newly Listed Only)' : ''}${onlyNoWebsite ? ' (No Website Only)' : ''}${excludeAlreadyEnriched ? ' (Excluding previously seen)' : ''}...`;
       loadingState.classList.remove('hidden');
       resultsSection.classList.add('hidden');
       errorState.classList.add('hidden');
@@ -286,6 +300,7 @@
             query,
             limit,
             onlyNewListed,
+            onlyNoWebsite,
             excludeAlreadyEnriched
           })
         });
@@ -303,6 +318,7 @@
         // Summary text
         let filterSummary = [];
         if (onlyNewListed) filterSummary.push('🌱 Filtered for Newly Listed (≤ 10 reviews)');
+        if (onlyNoWebsite) filterSummary.push('🚫 Filtered for Businesses without Website');
         if (excludeAlreadyEnriched) filterSummary.push('🧠 Excluded previously enriched leads');
         document.getElementById('filterSummaryText').textContent = filterSummary.join(' • ');
 
@@ -367,6 +383,12 @@
              </span>`
           : '';
 
+        const noWebsiteBadge = (!lead.website || lead.has_no_website)
+          ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+              🚫 No Website
+             </span>`
+          : '';
+
         const employeesList = lead.employees && lead.employees !== "None identified" && lead.employees !== "None found"
           ? lead.employees.split('\n').map(emp => {
               const parts = emp.split(' (http');
@@ -390,8 +412,9 @@
           <div>
             <!-- Header Badges -->
             <div class="flex items-center justify-between gap-2 mb-2">
-              <div class="flex items-center gap-1.5">
+              <div class="flex flex-wrap items-center gap-1.5">
                 ${newlyListedBadge}
+                ${noWebsiteBadge}
                 ${lead.is_google_verified ? `<span class="text-[10px] font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full">Google Verified</span>` : ''}
               </div>
               ${lead.rating ? `<span class="flex items-center gap-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-semibold px-2 py-0.5 rounded-full"><i data-lucide="star" class="w-3 h-3 fill-amber-400"></i> ${lead.rating} ${lead.user_rating_count !== undefined ? `<span class="text-[10px] text-slate-400 font-normal">(${lead.user_rating_count})</span>` : ''}</span>` : ''}
@@ -404,6 +427,12 @@
                 ${websiteLink}
                 ${mapLink}
               </div>
+              ${(!lead.website || lead.has_no_website) ? `
+                <div class="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-950/40 border border-amber-500/30 text-[11px] text-amber-300 font-medium">
+                  <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-400"></i>
+                  <span>Prime Outreach: Web Design & Tech Pitch Opportunity</span>
+                </div>
+              ` : ''}
             </div>
 
             <!-- AI Summary Pill -->

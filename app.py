@@ -35,6 +35,7 @@ def search():
     query = data.get("query", "").strip()
     limit = int(data.get("limit", 10))
     only_new_listed = bool(data.get("onlyNewListed", False))
+    only_no_website = bool(data.get("onlyNoWebsite", False))
     exclude_already_enriched = bool(data.get("excludeAlreadyEnriched", True))
 
     if not query:
@@ -48,11 +49,12 @@ def search():
         search_query = ai_query_info.get("places_query", query)
         roles = ai_query_info.get("roles", "CEO OR Founder OR Director")
 
-        # 2. Search companies with newly-listed & deduplication filters
+        # 2. Search companies with newly-listed, no-website, & deduplication filters
         companies = bot.search_companies(
             query=search_query,
             limit=limit,
             only_new_listed=only_new_listed,
+            only_no_website=only_no_website,
             exclude_already_enriched=exclude_already_enriched
         )
         
@@ -94,7 +96,7 @@ def export_csv():
 
     output = io.StringIO()
     fields = [
-        "name", "category", "is_new_listing", "rating", "user_rating_count",
+        "name", "category", "has_website", "is_new_listing", "rating", "user_rating_count",
         "phone", "email", "address", "website", "google_maps_uri",
         "linkedin_company", "employees", "ai_summary"
     ]
@@ -104,6 +106,7 @@ def export_csv():
         writer.writerow({
             "name": row.get("name", ""),
             "category": row.get("category", ""),
+            "has_website": "Yes" if row.get("website") else "No (Website Opportunity)",
             "is_new_listing": "Yes (Newly Listed)" if row.get("is_new_listing") else "No",
             "rating": row.get("rating", ""),
             "user_rating_count": row.get("user_rating_count", 0),

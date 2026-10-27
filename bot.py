@@ -158,12 +158,14 @@ class CompanyEnrichmentBot:
         query: str,
         limit: int = 10,
         only_new_listed: bool = False,
+        only_no_website: bool = False,
         exclude_already_enriched: bool = True
     ) -> List[Dict]:
         """
         Search for companies with strict verification:
         - Exclude previously enriched leads (if enabled)
         - Filter for newly listed / emerging establishments (if enabled)
+        - Filter for businesses without websites (if enabled)
         - Skip closed businesses
         """
         existing_ids, existing_domains, existing_names = (set(), set(), set())
@@ -172,11 +174,12 @@ class CompanyEnrichmentBot:
             console.print(f"[cyan]➜ [Lead Memory] Active. Checking against {len(existing_ids)} previously saved leads...[/cyan]")
 
         if self.google_api_key and self.google_api_key != "your_google_places_api_key_here":
-            console.print(f"[cyan]➜ [Google Places API (New)] Fetching real verified listings...[/cyan]")
+            console.print(f"[cyan]➜ [Google Places API (New)] Fetching real verified listings (No Website Only: {only_no_website})...[/cyan]")
             places_results = self._search_google_places_new(
                 query=query,
                 limit=limit,
                 only_new_listed=only_new_listed,
+                only_no_website=only_no_website,
                 existing_ids=existing_ids,
                 existing_domains=existing_domains,
                 existing_names=existing_names
@@ -194,11 +197,12 @@ class CompanyEnrichmentBot:
         query: str,
         limit: int = 10,
         only_new_listed: bool = False,
+        only_no_website: bool = False,
         existing_ids: Optional[Set[str]] = None,
         existing_domains: Optional[Set[str]] = None,
         existing_names: Optional[Set[str]] = None
     ) -> List[Dict]:
-        """Query Google Places API (New) with exact field masks, verification, deduplication, and newly-listed filtering."""
+        """Query Google Places API (New) with exact field masks, verification, deduplication, newly-listed, and no-website filtering."""
         existing_ids = existing_ids or set()
         existing_domains = existing_domains or set()
         existing_names = existing_names or set()
@@ -263,6 +267,11 @@ class CompanyEnrichmentBot:
                             name_obj = p.get("displayName", {})
                             name = name_obj.get("text", "") if isinstance(name_obj, dict) else str(name_obj)
                             website = p.get("websiteUri", "")
+                            has_web = bool(website and website.strip())
+
+                            # If user requested only businesses without website, skip those that have one
+                            if only_no_website and has_web:
+                                continue
 
                             # Check lead memory database
                             if db.is_lead_duplicate(place_id, website, name, existing_ids, existing_domains, existing_names):
@@ -285,6 +294,8 @@ class CompanyEnrichmentBot:
                                 "address": p.get("formattedAddress", ""),
                                 "phone": phone,
                                 "website": website,
+                                "has_website": has_web,
+                                "has_no_website": not has_web,
                                 "rating": str(p.get("rating", "")),
                                 "user_rating_count": user_ratings_count,
                                 "category": category,
@@ -524,7 +535,9 @@ class CompanyEnrichmentBot:
                 pass
 
         if not ai_summary:
-            if combined_text:
+            if not website_url:
+                ai_summary = f"Operating as {base_summary or company_name} without an official website listed on Google Maps. High-intent prospect for web design, local SEO, and digital booking services."
+            elif combined_text:
                 clean_snippet = re.sub(r'\s+', ' ', combined_text).strip()
                 ai_summary = clean_snippet[:160] + "..." if len(clean_snippet) > 160 else clean_snippet
             else:
@@ -603,21 +616,23 @@ class CompanyEnrichmentBot:
         query: str,
         limit: int = 10,
         only_new_listed: bool = False,
+        only_no_website: bool = False,
         exclude_already_enriched: bool = True,
         output_format: str = "csv",
         output_path: Optional[str] = None
     ):
-        console.print(f"\n[bold green]⚡ [Parallel AI Engine] Searching:[/bold green] [bold white]'{query}'[/bold white] (Limit: {limit}, Newly Listed: {only_new_listed}, Deduplication: {exclude_already_enriched})\n")
+        console.print(f"\n[bold green]⚡ [Parallel AI Engine] Searching:[/bold green] [bold white]'{query}'[/bold white] (Limit: {limit}, Newly Listed: {only_new_listed}, No Website: {only_no_website}, Deduplication: {exclude_already_enriched})\n")
 
         ai_query_data = self.ai_enhance_query(query)
         search_term = ai_query_data.get("places_query", query)
         roles = ai_query_data.get("roles", "CEO OR Founder OR Director")
 
-        # 1. Fetch places with deduplication and newly listed filtering
+        # 1. Fetch places with deduplication, newly listed, and no-website filtering
         companies = self.search_companies(
             query=search_term,
             limit=limit,
             only_new_listed=only_new_listed,
+            only_no_website=only_no_website,
             exclude_already_enriched=exclude_already_enriched
         )
         if not companies:
@@ -697,6 +712,7 @@ def main():
     parser.add_argument("-q", "--query", type=str, help="Search query (e.g. 'AI Startups in Austin TX')")
     parser.add_argument("-l", "--limit", type=int, default=10, help="Maximum number of companies to extract (default: 10)")
     parser.add_argument("--new-only", action="store_true", help="Show only newly listed / emerging businesses (<= 10 reviews)")
+    parser.add_argument("--no-website-only", action="store_true", help="Show only businesses without a website")
     parser.add_argument("--include-duplicates", action="store_true", help="Include previously enriched leads (disabled by default)")
     parser.add_argument("-f", "--format", choices=["csv", "xlsx", "json"], default="csv", help="Export format (default: csv)")
     parser.add_argument("-o", "--output", type=str, help="Custom output file path")
@@ -716,6 +732,7 @@ def main():
         query=query,
         limit=args.limit,
         only_new_listed=args.new_only,
+        only_no_website=args.no_website_only,
         exclude_already_enriched=(not args.include_duplicates),
         output_format=args.format,
         output_path=args.output
