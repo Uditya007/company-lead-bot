@@ -320,6 +320,7 @@
         if (onlyNewListed) filterSummary.push('🌱 Filtered for Newly Listed (≤ 10 reviews)');
         if (onlyNoWebsite) filterSummary.push('🚫 Filtered for Businesses without Website');
         if (excludeAlreadyEnriched) filterSummary.push('🧠 Excluded previously enriched leads');
+        if (data.duplicates_skipped > 0) filterSummary.push(`⚡ ${data.duplicates_skipped} duplicates skipped from memory`);
         document.getElementById('filterSummaryText').textContent = filterSummary.join(' • ');
 
         renderResults(currentResults);

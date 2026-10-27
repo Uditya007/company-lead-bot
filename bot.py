@@ -58,6 +58,7 @@ class CompanyEnrichmentBot:
         self.gemini_api_key = (gemini_api_key or GEMINI_API_KEY).strip()
         self.max_workers = max_workers
         self.gemini_client = None
+        self.last_duplicates_skipped = 0
         
         db.init_db()
 
@@ -192,6 +193,76 @@ class CompanyEnrichmentBot:
             console.print(f"[yellow]➜ Using AI-enhanced web search fallback...[/yellow]")
             return self._search_free_web(query, limit=limit, existing_domains=existing_domains, existing_names=existing_names)
 
+    def generate_search_queries(
+        self,
+        query: str,
+        limit: int,
+        only_new_listed: bool = False,
+        only_no_website: bool = False
+    ) -> List[str]:
+        """
+        Generate multiple targeted search queries across geographic sub-regions,
+        directions, and business synonyms to guarantee collecting up to 50-100 leads
+        even after strict deduplication and filters.
+        """
+        queries = [query]
+        clean_q = query.strip()
+        lower_q = clean_q.lower()
+
+        # If query has 'in' or 'near' (e.g. 'dentists in Bengaluru' or 'plumbers in Miami')
+        location = ""
+        category = ""
+        for sep in [" in ", " near ", " around ", " at "]:
+            if sep in lower_q:
+                idx = lower_q.find(sep)
+                category = clean_q[:idx].strip()
+                location = clean_q[idx + len(sep):].strip()
+                break
+
+        if location and category:
+            # Sub-region / directional expansion
+            queries.append(f"top {category} in {location}")
+            queries.append(f"best {category} in {location}")
+            queries.append(f"{category} in South {location}")
+            queries.append(f"{category} in North {location}")
+            queries.append(f"{category} in East {location}")
+            queries.append(f"{category} in West {location}")
+            queries.append(f"{category} in Central {location}")
+            queries.append(f"{category} in Downtown {location}")
+            queries.append(f"local {category} in {location}")
+            
+            # Popular city hubs if Bengaluru / Bangalore
+            if "bengaluru" in location.lower() or "bangalore" in location.lower():
+                queries.append(f"{category} in Koramangala Bengaluru")
+                queries.append(f"{category} in Indiranagar Bengaluru")
+                queries.append(f"{category} in Whitefield Bengaluru")
+                queries.append(f"{category} in HSR Layout Bengaluru")
+                queries.append(f"{category} in Jayanagar Bengaluru")
+                queries.append(f"{category} in Electronic City Bengaluru")
+        else:
+            queries.append(f"best {clean_q}")
+            queries.append(f"top {clean_q}")
+            queries.append(f"local {clean_q}")
+            queries.append(f"{clean_q} services")
+            queries.append(f"independent {clean_q}")
+
+        if only_new_listed:
+            new_variants = [f"newly opened {q}" for q in queries[:5]] + [f"new {q}" for q in queries[:5]]
+            queries = new_variants + queries
+        elif only_no_website:
+            no_web_variants = [f"local {q}" for q in queries[:5]] + [f"independent {q}" for q in queries[:5]]
+            queries = no_web_variants + queries
+
+        # Deduplicate while preserving order
+        unique_queries = []
+        seen = set()
+        for q in queries:
+            if q.lower() not in seen:
+                seen.add(q.lower())
+                unique_queries.append(q)
+
+        return unique_queries
+
     def _search_google_places_new(
         self,
         query: str,
@@ -206,6 +277,7 @@ class CompanyEnrichmentBot:
         existing_ids = existing_ids or set()
         existing_domains = existing_domains or set()
         existing_names = existing_names or set()
+        self.last_duplicates_skipped = 0
 
         url = "https://places.googleapis.com/v1/places:searchText"
         headers = {
@@ -220,22 +292,24 @@ class CompanyEnrichmentBot:
             )
         }
 
-        # If user wants newly listed, query variations with "new" / "newly opened" to prompt Google Maps
-        # to surface recent listings rather than just veteran establishments with 1000+ reviews
-        search_queries = [query]
-        if only_new_listed:
-            search_queries = [
-                f"newly opened {query}",
-                f"new {query}",
-                query
-            ]
+        # Dynamically generate multi-query variations to guarantee reaching 50-100 leads
+        search_queries = self.generate_search_queries(
+            query=query,
+            limit=limit,
+            only_new_listed=only_new_listed,
+            only_no_website=only_no_website
+        )
 
         candidate_places = []
         seen_place_ids = set()
+        target_count = limit if not only_new_listed else limit * 2
 
         for q in search_queries:
+            if len(candidate_places) >= target_count:
+                break
+
             next_page_token = None
-            max_pages_per_query = 3 if only_new_listed else 5
+            max_pages_per_query = 3
             page_count = 0
 
             while page_count < max_pages_per_query:
@@ -275,6 +349,7 @@ class CompanyEnrichmentBot:
 
                             # Check lead memory database
                             if db.is_lead_duplicate(place_id, website, name, existing_ids, existing_domains, existing_names):
+                                self.last_duplicates_skipped += 1
                                 continue
 
                             seen_place_ids.add(place_id)
@@ -304,8 +379,11 @@ class CompanyEnrichmentBot:
                                 "is_google_verified": True
                             })
 
+                            if len(candidate_places) >= target_count:
+                                break
+
                         next_page_token = resp_json.get("nextPageToken")
-                        if not next_page_token:
+                        if not next_page_token or len(candidate_places) >= target_count:
                             break
                         time.sleep(0.3)
                     else:

@@ -80,6 +80,7 @@ def search():
             "query": query,
             "ai_optimized_query": search_query,
             "count": len(enriched),
+            "duplicates_skipped": bot.last_duplicates_skipped,
             "total_in_memory": db.get_total_enriched_count(),
             "results": enriched
         })
