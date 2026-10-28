@@ -5,7 +5,7 @@ import time
 import warnings
 import argparse
 import concurrent.futures
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 from urllib.parse import urlparse, urljoin, parse_qs, unquote
 
 # Suppress SSL/urllib3 LibreSSL warnings on macOS
@@ -187,6 +187,9 @@ class CompanyEnrichmentBot:
             )
             if places_results:
                 return places_results
+            if only_no_website:
+                console.print("[yellow]➜ No new places without websites found in Google Places API.[/yellow]")
+                return []
             console.print("[yellow]➜ Places API returned 0 matching results. Falling back to web search...[/yellow]")
             return self._search_free_web(query, limit=limit, existing_domains=existing_domains, existing_names=existing_names)
         else:
@@ -201,15 +204,92 @@ class CompanyEnrichmentBot:
         only_no_website: bool = False
     ) -> List[str]:
         """
-        Generate multiple targeted search queries across geographic sub-regions,
-        directions, and business synonyms to guarantee collecting up to 50-100 leads
-        even after strict deduplication and filters.
+        Generate multiple targeted search queries across geographic regions,
+        cities, neighborhoods, and business synonyms to guarantee collecting up to
+        50-100 verified leads even with strict deduplication and filters.
         """
-        queries = [query]
+        COUNTRY_METROS = {
+            "australia": [
+                "Sydney NSW", "Melbourne VIC", "Brisbane QLD", "Perth WA", "Adelaide SA",
+                "Gold Coast QLD", "Canberra ACT", "Newcastle NSW", "Wollongong NSW",
+                "Geelong VIC", "Sunshine Coast QLD", "Hobart TAS", "Darwin NT",
+                "Cairns QLD", "Townsville QLD", "Toowoomba QLD", "Ballarat VIC", "Bendigo VIC"
+            ],
+            "aus": [
+                "Sydney NSW", "Melbourne VIC", "Brisbane QLD", "Perth WA", "Adelaide SA",
+                "Gold Coast QLD", "Canberra ACT", "Newcastle NSW", "Wollongong NSW",
+                "Geelong VIC", "Sunshine Coast QLD", "Hobart TAS", "Darwin NT"
+            ],
+            "au": [
+                "Sydney NSW", "Melbourne VIC", "Brisbane QLD", "Perth WA", "Adelaide SA",
+                "Gold Coast QLD", "Canberra ACT", "Newcastle NSW", "Wollongong NSW",
+                "Geelong VIC", "Sunshine Coast QLD", "Hobart TAS", "Darwin NT"
+            ],
+            "united states": [
+                "New York NY", "Los Angeles CA", "Chicago IL", "Houston TX", "Phoenix AZ",
+                "Philadelphia PA", "San Antonio TX", "San Diego CA", "Dallas TX", "Austin TX",
+                "Miami FL", "Atlanta GA", "Seattle WA", "Denver CO", "Boston MA", "San Francisco CA"
+            ],
+            "usa": [
+                "New York NY", "Los Angeles CA", "Chicago IL", "Houston TX", "Phoenix AZ",
+                "Philadelphia PA", "San Antonio TX", "San Diego CA", "Dallas TX", "Austin TX",
+                "Miami FL", "Atlanta GA", "Seattle WA", "Denver CO", "Boston MA", "San Francisco CA"
+            ],
+            "us": [
+                "New York NY", "Los Angeles CA", "Chicago IL", "Houston TX", "Phoenix AZ",
+                "Philadelphia PA", "San Antonio TX", "San Diego CA", "Dallas TX", "Austin TX",
+                "Miami FL", "Atlanta GA", "Seattle WA", "Denver CO", "Boston MA", "San Francisco CA"
+            ],
+            "united kingdom": [
+                "London", "Birmingham", "Manchester", "Leeds", "Glasgow", "Liverpool",
+                "Bristol", "Edinburgh", "Sheffield", "Newcastle", "Belfast", "Cardiff"
+            ],
+            "uk": [
+                "London", "Birmingham", "Manchester", "Leeds", "Glasgow", "Liverpool",
+                "Bristol", "Edinburgh", "Sheffield", "Newcastle", "Belfast", "Cardiff"
+            ],
+            "canada": [
+                "Toronto ON", "Montreal QC", "Vancouver BC", "Calgary AB", "Edmonton AB",
+                "Ottawa ON", "Winnipeg MB", "Quebec City QC", "Hamilton ON", "Halifax NS"
+            ],
+            "india": [
+                "Bengaluru", "Mumbai", "Delhi NCR", "Hyderabad", "Chennai", "Pune",
+                "Kolkata", "Ahmedabad", "Jaipur", "Surat", "Chandigarh", "Kochi"
+            ],
+            "germany": [
+                "Berlin", "Munich", "Frankfurt", "Hamburg", "Cologne", "Stuttgart", "Düsseldorf"
+            ],
+            "new zealand": [
+                "Auckland", "Wellington", "Christchurch", "Hamilton", "Tauranga"
+            ],
+            "uae": [
+                "Dubai", "Abu Dhabi", "Sharjah", "Ajman"
+            ],
+            "singapore": [
+                "Singapore Central", "Jurong", "Tampines", "Woodlands", "Orchard"
+            ]
+        }
+
+        CITY_HUBS = {
+            "sydney": ["Parramatta", "Bondi", "Surry Hills", "Chatswood", "North Sydney", "Blacktown", "Manly", "Penrith", "Ryde", "Kogarah"],
+            "melbourne": ["Richmond", "South Yarra", "St Kilda", "Brunswick", "Carlton", "Dandenong", "Geelong", "Frankston"],
+            "brisbane": ["Fortitude Valley", "South Brisbane", "Logan", "Chermside", "Indooroopilly", "Springwood"],
+            "perth": ["Fremantle", "Joondalup", "Victoria Park", "Midland", "Subiaco"],
+            "adelaide": ["North Adelaide", "Glenelg", "Norwood", "Port Adelaide", "Mawson Lakes"],
+            "bengaluru": ["Koramangala", "Indiranagar", "Whitefield", "HSR Layout", "Jayanagar", "Electronic City", "Marathahalli"],
+            "bangalore": ["Koramangala", "Indiranagar", "Whitefield", "HSR Layout", "Jayanagar", "Electronic City", "Marathahalli"],
+            "mumbai": ["Bandra", "Andheri", "BKC", "Powai", "Colaba", "Thane", "Navi Mumbai"],
+            "delhi": ["Connaught Place", "South Extension", "Saket", "Nehru Place", "Dwarka", "Gurugram", "Noida"],
+            "new york": ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island", "Midtown", "Financial District"],
+            "london": ["Westminster", "Camden", "Islington", "Hackney", "Canary Wharf", "Kensington", "Chelsea"],
+            "toronto": ["Downtown Toronto", "North York", "Scarborough", "Mississauga", "Etobicoke", "Yorkville"]
+        }
+
+        queries = [query.strip()]
         clean_q = query.strip()
         lower_q = clean_q.lower()
 
-        # If query has 'in' or 'near' (e.g. 'dentists in Bengaluru' or 'plumbers in Miami')
+        # Parse category & location (e.g. 'plumbers in australia', 'dentists in Sydney')
         location = ""
         category = ""
         for sep in [" in ", " near ", " around ", " at "]:
@@ -219,26 +299,65 @@ class CompanyEnrichmentBot:
                 location = clean_q[idx + len(sep):].strip()
                 break
 
+        norm_loc = location.lower().strip(",. ")
+
+        # 1. Check if location is a country
+        matched_country = None
+        for country_key in COUNTRY_METROS:
+            if norm_loc == country_key or norm_loc == f"the {country_key}" or norm_loc.endswith(f" {country_key}"):
+                matched_country = country_key
+                break
+
+        if matched_country and category:
+            cities = COUNTRY_METROS[matched_country]
+            if only_no_website:
+                for c in cities:
+                    queries.append(f"local {category} in {c}")
+                    queries.append(f"independent {category} in {c}")
+                    queries.append(f"emergency {category} in {c}")
+                    queries.append(f"{category} contractor in {c}")
+            elif only_new_listed:
+                for c in cities:
+                    queries.append(f"newly opened {category} in {c}")
+                    queries.append(f"new {category} in {c}")
+                    queries.append(f"local {category} in {c}")
+            else:
+                for c in cities:
+                    queries.append(f"{category} in {c}")
+                    queries.append(f"best {category} in {c}")
+                    queries.append(f"top {category} in {c}")
+            return queries
+
+        # 2. Check if location is a known city with prominent hubs/suburbs
+        matched_city = None
+        for city_key in CITY_HUBS:
+            if norm_loc == city_key or norm_loc.startswith(city_key) or city_key in norm_loc:
+                matched_city = city_key
+                break
+
+        if matched_city and category:
+            hubs = CITY_HUBS[matched_city]
+            for h in hubs:
+                queries.append(f"{category} in {h} {clean_q[clean_q.lower().find(location):]}")
+            if only_no_website:
+                for h in hubs:
+                    queries.append(f"local {category} in {h}")
+                    queries.append(f"independent {category} in {h}")
+            elif only_new_listed:
+                for h in hubs:
+                    queries.append(f"newly opened {category} in {h}")
+            return queries
+
+        # 3. Standard city or locality directional expansion (only if location is specified)
         if location and category:
-            # Sub-region / directional expansion
             queries.append(f"top {category} in {location}")
             queries.append(f"best {category} in {location}")
+            queries.append(f"local {category} in {location}")
             queries.append(f"{category} in South {location}")
             queries.append(f"{category} in North {location}")
             queries.append(f"{category} in East {location}")
             queries.append(f"{category} in West {location}")
             queries.append(f"{category} in Central {location}")
-            queries.append(f"{category} in Downtown {location}")
-            queries.append(f"local {category} in {location}")
-            
-            # Popular city hubs if Bengaluru / Bangalore
-            if "bengaluru" in location.lower() or "bangalore" in location.lower():
-                queries.append(f"{category} in Koramangala Bengaluru")
-                queries.append(f"{category} in Indiranagar Bengaluru")
-                queries.append(f"{category} in Whitefield Bengaluru")
-                queries.append(f"{category} in HSR Layout Bengaluru")
-                queries.append(f"{category} in Jayanagar Bengaluru")
-                queries.append(f"{category} in Electronic City Bengaluru")
         else:
             queries.append(f"best {clean_q}")
             queries.append(f"top {clean_q}")
@@ -263,22 +382,8 @@ class CompanyEnrichmentBot:
 
         return unique_queries
 
-    def _search_google_places_new(
-        self,
-        query: str,
-        limit: int = 10,
-        only_new_listed: bool = False,
-        only_no_website: bool = False,
-        existing_ids: Optional[Set[str]] = None,
-        existing_domains: Optional[Set[str]] = None,
-        existing_names: Optional[Set[str]] = None
-    ) -> List[Dict]:
-        """Query Google Places API (New) with exact field masks, verification, deduplication, newly-listed, and no-website filtering."""
-        existing_ids = existing_ids or set()
-        existing_domains = existing_domains or set()
-        existing_names = existing_names or set()
-        self.last_duplicates_skipped = 0
-
+    def _fetch_single_places_query(self, query_str: str, page_token: Optional[str] = None) -> Tuple[List[Dict], Optional[str]]:
+        """Fetch a single page of places from Google Places API (New)."""
         url = "https://places.googleapis.com/v1/places:searchText"
         headers = {
             "Content-Type": "application/json",
@@ -291,8 +396,39 @@ class CompanyEnrichmentBot:
                 "places.editorialSummary,nextPageToken"
             )
         }
+        data = {
+            "textQuery": query_str,
+            "pageSize": 20
+        }
+        if page_token:
+            data["pageToken"] = page_token
 
-        # Dynamically generate multi-query variations to guarantee reaching 50-100 leads
+        try:
+            resp = self.session.post(url, headers=headers, json=data, timeout=8)
+            if resp.status_code == 200:
+                resp_json = resp.json()
+                return resp_json.get("places", []), resp_json.get("nextPageToken")
+        except Exception:
+            pass
+        return [], None
+
+    def _search_google_places_new(
+        self,
+        query: str,
+        limit: int = 10,
+        only_new_listed: bool = False,
+        only_no_website: bool = False,
+        existing_ids: Optional[Set[str]] = None,
+        existing_domains: Optional[Set[str]] = None,
+        existing_names: Optional[Set[str]] = None
+    ) -> List[Dict]:
+        """Query Google Places API (New) with parallel concurrent fetching, exact field masks, deduplication, and filters."""
+        existing_ids = existing_ids or set()
+        existing_domains = existing_domains or set()
+        existing_names = existing_names or set()
+        self.last_duplicates_skipped = 0
+
+        # Dynamically generate multi-query variations across cities/neighborhoods
         search_queries = self.generate_search_queries(
             query=query,
             limit=limit,
@@ -304,95 +440,72 @@ class CompanyEnrichmentBot:
         seen_place_ids = set()
         target_count = limit if not only_new_listed else limit * 2
 
-        for q in search_queries:
+        # Process queries in concurrent batches of 8 for ultra-fast response
+        batch_size = 8
+        for i in range(0, len(search_queries), batch_size):
             if len(candidate_places) >= target_count:
                 break
 
-            next_page_token = None
-            max_pages_per_query = 3
-            page_count = 0
+            current_batch = search_queries[i:i + batch_size]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(current_batch), 8)) as executor:
+                batch_results = list(executor.map(self._fetch_single_places_query, current_batch))
 
-            while page_count < max_pages_per_query:
-                page_count += 1
-                data = {
-                    "textQuery": q,
-                    "pageSize": 20
-                }
-                if next_page_token:
-                    data["pageToken"] = next_page_token
+            for raw_places, next_token in batch_results:
+                for p in raw_places:
+                    status = p.get("businessStatus", "OPERATIONAL")
+                    if status in ["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]:
+                        continue
 
-                try:
-                    resp = self.session.post(url, headers=headers, json=data, timeout=8)
-                    if resp.status_code == 200:
-                        resp_json = resp.json()
-                        raw_places = resp_json.get("places", [])
-                        if not raw_places:
-                            break
+                    place_id = p.get("id", "")
+                    if not place_id or place_id in seen_place_ids:
+                        continue
 
-                        for p in raw_places:
-                            status = p.get("businessStatus", "OPERATIONAL")
-                            if status in ["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]:
-                                continue
+                    name_obj = p.get("displayName", {})
+                    name = name_obj.get("text", "") if isinstance(name_obj, dict) else str(name_obj)
+                    website = p.get("websiteUri", "")
+                    has_web = bool(website and website.strip())
 
-                            place_id = p.get("id", "")
-                            if not place_id or place_id in seen_place_ids:
-                                continue
+                    # Filter for businesses without website if enabled
+                    if only_no_website and has_web:
+                        continue
 
-                            name_obj = p.get("displayName", {})
-                            name = name_obj.get("text", "") if isinstance(name_obj, dict) else str(name_obj)
-                            website = p.get("websiteUri", "")
-                            has_web = bool(website and website.strip())
+                    # Check lead memory database for deduplication
+                    if db.is_lead_duplicate(place_id, website, name, existing_ids, existing_domains, existing_names):
+                        self.last_duplicates_skipped += 1
+                        continue
 
-                            # If user requested only businesses without website, skip those that have one
-                            if only_no_website and has_web:
-                                continue
+                    seen_place_ids.add(place_id)
 
-                            # Check lead memory database
-                            if db.is_lead_duplicate(place_id, website, name, existing_ids, existing_domains, existing_names):
-                                self.last_duplicates_skipped += 1
-                                continue
+                    user_ratings = p.get("userRatingCount")
+                    user_ratings_count = int(user_ratings) if user_ratings is not None else 0
 
-                            seen_place_ids.add(place_id)
+                    phone = p.get("nationalPhoneNumber") or p.get("internationalPhoneNumber", "")
+                    type_obj = p.get("primaryTypeDisplayName", {})
+                    category = type_obj.get("text", "") if isinstance(type_obj, dict) else ""
+                    summary_obj = p.get("editorialSummary", {})
+                    summary = summary_obj.get("text", "") if isinstance(summary_obj, dict) else ""
 
-                            user_ratings = p.get("userRatingCount")
-                            user_ratings_count = int(user_ratings) if user_ratings is not None else 0
+                    candidate_places.append({
+                        "place_id": place_id,
+                        "name": name,
+                        "address": p.get("formattedAddress", ""),
+                        "phone": phone,
+                        "website": website,
+                        "has_website": has_web,
+                        "has_no_website": not has_web,
+                        "rating": str(p.get("rating", "")),
+                        "user_rating_count": user_ratings_count,
+                        "category": category,
+                        "summary": summary,
+                        "google_maps_uri": p.get("googleMapsUri", ""),
+                        "is_google_verified": True
+                    })
 
-                            phone = p.get("nationalPhoneNumber") or p.get("internationalPhoneNumber", "")
-                            type_obj = p.get("primaryTypeDisplayName", {})
-                            category = type_obj.get("text", "") if isinstance(type_obj, dict) else ""
-                            summary_obj = p.get("editorialSummary", {})
-                            summary = summary_obj.get("text", "") if isinstance(summary_obj, dict) else ""
-
-                            candidate_places.append({
-                                "place_id": place_id,
-                                "name": name,
-                                "address": p.get("formattedAddress", ""),
-                                "phone": phone,
-                                "website": website,
-                                "has_website": has_web,
-                                "has_no_website": not has_web,
-                                "rating": str(p.get("rating", "")),
-                                "user_rating_count": user_ratings_count,
-                                "category": category,
-                                "summary": summary,
-                                "google_maps_uri": p.get("googleMapsUri", ""),
-                                "is_google_verified": True
-                            })
-
-                            if len(candidate_places) >= target_count:
-                                break
-
-                        next_page_token = resp_json.get("nextPageToken")
-                        if not next_page_token or len(candidate_places) >= target_count:
-                            break
-                        time.sleep(0.3)
-                    else:
+                    if len(candidate_places) >= target_count:
                         break
-                except Exception:
-                    break
 
-            if only_new_listed and len(candidate_places) >= limit * 2:
-                break
+                if len(candidate_places) >= target_count:
+                    break
 
         if not candidate_places:
             return []

@@ -340,11 +340,28 @@
       container.innerHTML = '';
 
       if (leads.length === 0) {
+        let emptyTip = "Try searching for a specific city (e.g. <em>'plumbers in Sydney'</em> or <em>'plumbers in Melbourne'</em>).";
+
+        const onlyNoWebsite = document.getElementById('onlyNoWebsiteCheck').checked;
+        const onlyNewListed = document.getElementById('onlyNewListedCheck').checked;
+        const excludeAlreadyEnriched = document.getElementById('excludeEnrichedCheck').checked;
+
+        if (onlyNoWebsite) {
+          emptyTip = "Most established businesses in Australia and US have websites. Try unchecking <strong>'Only Businesses without Website'</strong> to view all verified plumbers.";
+        } else if (onlyNewListed) {
+          emptyTip = "No newly opened businesses with &le; 10 reviews were found. Try unchecking <strong>'Only Newly Listed'</strong>.";
+        } else if (excludeAlreadyEnriched) {
+          emptyTip = "All matching businesses in this area were already saved in memory. Try unchecking <strong>'Skip Already Enriched'</strong> or click <strong>Clear</strong> on the Lead Memory badge.";
+        }
+
         container.innerHTML = `
-          <div class="col-span-full text-center py-16 text-slate-400 bg-slate-900 border border-slate-800 rounded-2xl">
-            <i data-lucide="search-x" class="w-10 h-10 mx-auto text-slate-500 mb-3"></i>
-            <h4 class="text-base font-bold text-white mb-1">No New Leads Found</h4>
-            <p class="text-xs text-slate-400 max-w-md mx-auto">All matching companies may have already been enriched in your lead memory, or no businesses matched the "Newly Listed" filter. Try expanding your search terms or unchecking the filters.</p>
+          <div class="col-span-full text-center py-16 px-6 text-slate-400 bg-slate-900 border border-slate-800 rounded-2xl">
+            <i data-lucide="search-x" class="w-12 h-12 mx-auto text-amber-400/80 mb-3"></i>
+            <h4 class="text-base font-bold text-white mb-2">No Matching Leads Found</h4>
+            <p class="text-xs text-slate-400 max-w-md mx-auto mb-4">No new leads matched your search query and active filters.</p>
+            <div class="inline-block bg-slate-950/80 border border-slate-800 px-5 py-3 rounded-xl text-xs text-slate-300 max-w-lg text-left">
+              <span class="text-amber-400 font-semibold">💡 Helpful Tip:</span> ${emptyTip}
+            </div>
           </div>
         `;
         lucide.createIcons();
